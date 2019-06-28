@@ -62,10 +62,14 @@ if !ENV['__REPL_WRAPPED'] && system("which rlwrap > /dev/null 2> /dev/null")
   ENV['__REPL_WRAPPED'] = '0'
 
   rlargs = ""
+  rlargs << " --complete-filenames"
+  rlargs << " --ansi-colour-aware"
+  rlargs << " --history-no-dupes=2"
+  rlargs << " --multi-line"
   rlargs << " -f #{cfile}" if cfile
   rlargs << " -H #{hfile}" if hfile
 
-  exec "rlwrap #{rlargs} #$0 #{ARGV.join(' ')}"
+  exec "bash -c \"printf '\033k#{ARGV[0]}\033\\'; rlwrap #{rlargs} #$0 #{ARGV.join(' ')}\""
 end
 
 if ARGV[0] == '--debug'
@@ -87,7 +91,12 @@ if debug
 end
 
 loop do
-  print ENV['REPL_PROMPT'] || "#{ARGV[0]}>> "
+  if ENV['REPL_PROMPT']
+    system(ENV['REPL_PROMPT'])
+    print " "
+  else
+    print "#{ARGV[0]}>> "
+  end
 
   begin
     line = $stdin.gets.chomp
