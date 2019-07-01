@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 
+require 'colorize'
+
 # repl(1) -- sometimes you need a repl
 #
 # repl is an interactive program which tenderly wraps another,
@@ -21,10 +23,11 @@ def show_help
 Usage: repl [options] command ...
 
 Options:
-  --help    Display this message
-  --stdin   Pipe input to command's STDIN
-  --debug   Display each command executed
-  --man     Display the man page
+  --help        Display this message
+  --stdin       Pipe input to command's STDIN
+  --post-pipe   Pipe the result of each command into this pipeline
+  --debug       Display each command executed
+  --man         Display the man page
 
 Bug reports, suggestions, updates:
 http://github.com/defunkt/repl/issues
@@ -66,19 +69,29 @@ if !ENV['__REPL_WRAPPED'] && system("which rlwrap > /dev/null 2> /dev/null")
   rlargs << " --ansi-colour-aware"
   rlargs << " --history-no-dupes=2"
   rlargs << " --multi-line"
+  rlargs << " --break-chars=\"\""
   rlargs << " -f #{cfile}" if cfile
   rlargs << " -H #{hfile}" if hfile
 
-  exec "bash -c \"printf '\033k#{ARGV[0]}\033\\'; rlwrap #{rlargs} #$0 #{ARGV.join(' ')}\""
+  title = ENV['REPL_TITLE'] || ARGV[0]
+  puts "bash -c \"printf '\033k#{title}\033\\'; rlwrap #{rlargs} #$0 #{ARGV.join(' ')}\"" if ARGV.include? '--debug'
+  exec "bash -c \"printf '\033k#{title}\033\\'; rlwrap #{rlargs} #$0 #{ARGV.join(' ')}\""
 end
 
-if ARGV[0] == '--debug'
+if ARGV.include? '--post-pipe'
+  post_pipe = ARGV[(ARGV.index '--post-pipe') + 1]
+  ARGV.delete('--post-pipe')
+  ARGV.delete(post_pipe)
+end
+
+if ARGV.include? '--debug'
   debug = ARGV.delete('--debug')
 end
 
 if ARGV.include? '--stdin'
   from_stdin = ARGV.delete('--stdin')
 end
+
 
 command = ARGV.join(' ')
 show_help if command.empty?
@@ -90,7 +103,11 @@ if debug
   puts command.inspect
 end
 
+result = nil
 loop do
+  if not result.nil?
+    print (result ? "✔".green : "✘".red )
+  end
   if ENV['REPL_PROMPT']
     system(ENV['REPL_PROMPT'])
     print " "
@@ -104,12 +121,20 @@ loop do
     exit
   end
 
-  if from_stdin
-    run = "echo \"%s\" | #{command}" % [ line, nil ]
+  if post_pipe
+    if from_stdin
+      run = "echo \"%s\" | #{command} | %s" % [ line, post_pipe, nil ]
+    else
+      run = "#{command} %s | %s" % [ line, post_pipe, nil ]
+    end
   else
-    run = "#{command} %s" % [ line, nil ]
+    if from_stdin
+      run = "echo \"%s\" | #{command}" % [ line, nil ]
+    else
+      run = "#{command} %s" % [ line, nil ]
+    end
   end
   puts "$ #{run}" if debug
-  system run
+  result = system "bash -c 'set -o pipefail; #{run}'"
   warn "Use Ctrl-D (i.e. EOF) to exit" if line =~ /^(exit|quit)$/
 end
