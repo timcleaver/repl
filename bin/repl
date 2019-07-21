@@ -106,7 +106,7 @@ end
 result = nil
 loop do
   if not result.nil?
-    print (result ? "✔".green : "✘".red )
+    print (result ? "✔ ".green : "✘ ".red )
   end
   if ENV['REPL_PROMPT']
     system(ENV['REPL_PROMPT'])
