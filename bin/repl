@@ -134,7 +134,10 @@ loop do
       run = "#{command} %s" % [ line, nil ]
     end
   end
-  puts "$ #{run}" if debug
+  # use bash quotes to handle single quotes inside double quotes.
+  # doesn't work when single quotes aren't inside double quoted strings. sigh
+  run.gsub!(/'/, '\'"\'"\'')
+  puts "bash -c 'set -o pipefail; #{run}'" if debug
   result = system "bash -c 'set -o pipefail; #{run}'"
   warn "Use Ctrl-D (i.e. EOF) to exit" if line =~ /^(exit|quit)$/
 end
