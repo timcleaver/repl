@@ -1,6 +1,9 @@
 #!/usr/bin/env ruby
 
+# frozen_string_literal: true
+
 require 'colorize'
+require 'awesome_print'
 
 # repl(1) -- sometimes you need a repl
 #
@@ -18,25 +21,31 @@ require 'colorize'
 # If you have rlwrap(1) installed you'll get the full benefits of
 # readline: history, reverse searches, etc.
 
+# rubocop:disable Layout/IndentHeredoc
 def show_help
-  puts <<-help
-Usage: repl [options] command ...
+  puts <<~HELP
+  Usage: repl [options] -- command ...
 
-Options:
-  --help        Display this message
-  --stdin       Pipe input to command's STDIN
-  --post-pipe   Pipe the result of each command into this pipeline
-  --debug       Display each command executed
-  --man         Display the man page
+  Options:
+    --help          Display this message
+    --stdin         Pipe input to command's STDIN
+    --post-command  Append this text to the command before execution
+    --pager         Append this after the post command (default less -RNMJF)
+    --debug         Display each command executed
+    --man           Display the man page
 
-Bug reports, suggestions, updates:
-http://github.com/defunkt/repl/issues
-help
-  exit
+  NOTE: The -- are required to handle cases where repl's option flags match the
+  commands option flags. repl will only read commands up to the first --. If --
+  is not present then it is assumed that the options apply to the command
+
+  HELP
 end
+# rubocop:enable Layout/IndentHeredoc
 
-if ARGV.empty? || ARGV.any? { |arg| %w( -h --help -help help ).include?(arg) }
+helps = ['-h', '--help', '-help', 'help']
+if ARGV.empty? || ARGV.any? { |a| helps.include? a }
   show_help
+  exit
 end
 
 if ARGV.include? '--man'
@@ -44,59 +53,77 @@ if ARGV.include? '--man'
   exec "man #{dir}/../man/repl.1"
 end
 
-completion_dir = ENV['REPL_COMPLETION_DIR'] || "~/.repl"
-if File.exists?(cdir = File.expand_path(completion_dir))
-  script = ARGV.detect { |a| a !~ /^-/ }
-  if script
-    cfile = Dir[cdir + '/' + File.basename(script)].first
-    cfile = nil if cfile && !File.exists?(cfile)
+completion_dir = ENV['REPL_COMPLETION_DIR'] || '~/.repl'
+if ARGV.find_index '--'
+  script = ARGV[ARGV.find_index('--')..-1].detect { |a| a !~ /^-/ }
+  if File.exist?(cdir = File.expand_path(completion_dir))
+    if script
+      cfile = Dir[cdir + '/' + File.basename(script)].first
+      cfile = nil if cfile && !File.exist?(cfile)
+    end
+  end
+
+  history_dir = ENV['REPL_HISTORY_DIR'] || '~/'
+  if File.exist?(hdir = File.expand_path(history_dir))
+    if script
+      hfile = "#{hdir}/.#{File.basename(script)}_history"
+    end
   end
 end
 
-history_dir = ENV['REPL_HISTORY_DIR'] || "~/"
-if File.exists?(hdir = File.expand_path(history_dir))
-  if script = ARGV.detect { |a| a !~ /^-/ }
-    script = File.basename(script)
-    hfile = "#{hdir}/.#{script}_history"
-  end
-end
-
-if !ENV['__REPL_WRAPPED'] && system("which rlwrap > /dev/null 2> /dev/null")
+if !ENV['__REPL_WRAPPED'] && system('which rlwrap > /dev/null 2> /dev/null')
   ENV['__REPL_WRAPPED'] = '0'
 
-  rlargs = ""
-  rlargs << " --complete-filenames"
-  rlargs << " --ansi-colour-aware"
-  rlargs << " --history-no-dupes=2"
-  rlargs << " --multi-line"
-  rlargs << " --break-chars=\"\""
-  rlargs << " -f #{cfile}" if cfile
-  rlargs << " -H #{hfile}" if hfile
+  rlargs = ''
+  rlargs += ' --complete-filenames'
+  rlargs += ' --ansi-colour-aware'
+  rlargs += ' --history-no-dupes=2'
+  rlargs += ' --multi-line'
+  rlargs += ' --break-chars=""'
+  # needed because we use filters + multiline strings
+  rlargs += ' --no-warnings'
+  rlargs += " --file=#{cfile}" if cfile
+  rlargs += " --history-file=#{hfile}" if hfile
+  rlargs += ' --filter=pipeto'
 
-  title = ENV['REPL_TITLE'] || ARGV[0]
-  puts "bash -c \"printf '\033k#{title}\033\\'; rlwrap #{rlargs} #$0 #{ARGV.join(' ')}\"" if ARGV.include? '--debug'
-  exec "bash -c \"printf '\033k#{title}\033\\'; rlwrap #{rlargs} #$0 #{ARGV.join(' ')}\""
+  dashdash = ARGV.find_index '--'
+  if dashdash.nil?
+    show_help
+    exit 1
+  end
+  replargs = ARGV[0..(dashdash - 1)] if dashdash.positive?
+  commandargs = ARGV[(dashdash + 1)..-1]
+
+  ENV['__REPL_PAGER'] = 'less -RNMJF'
+  unless replargs.nil?
+    if replargs.include? '--post-command'
+      # rubocop:disable Metrics/LineLength
+      ENV['__REPL_POST_COMMAND'] = replargs[(replargs.index '--post-command') + 1]
+      # rubocop:enable Metrics/LineLength
+    end
+    if replargs.include? '--pager'
+      ENV['__REPL_PAGER'] = replargs[(replargs.index '--pager') + 1]
+    end
+    ENV['__REPL_DEBUG'] = '1' unless replargs.delete('--debug').nil?
+    ENV['__REPL_STDIN'] = '1' unless replargs.delete('--stdin').nil?
+  end
+
+  title = ENV['REPL_TITLE'] || commandargs[0]
+  args = commandargs.map { |a| "\"#{a}\"" }.join ' '
+  # rubocop:disable Metrics/LineLength
+  command = "bash -c \"printf '\033k#{title}\033\\'; rlwrap #{rlargs} #{$PROGRAM_NAME} #{args}\""
+  # rubocop:enable Metrics/LineLength
+  puts command if ENV['__REPL_DEBUG']
+  exec command
 end
 
-if ARGV.include? '--post-pipe'
-  post_pipe = ARGV[(ARGV.index '--post-pipe') + 1]
-  ARGV.delete('--post-pipe')
-  ARGV.delete(post_pipe)
+command = ARGV.join(' ').strip
+if command.empty?
+  show_help
+  exit
 end
 
-if ARGV.include? '--debug'
-  debug = ARGV.delete('--debug')
-end
-
-if ARGV.include? '--stdin'
-  from_stdin = ARGV.delete('--stdin')
-end
-
-
-command = ARGV.join(' ')
-show_help if command.empty?
-
-if debug
+if ENV['__REPL_DEBUG']
   print 'rlwrap ' if ENV['__REPL_WRAPPED']
   print "-f #{cfile} " if cfile
   print "-H #{hfile} " if hfile
@@ -105,12 +132,14 @@ end
 
 result = nil
 loop do
-  if not result.nil?
-    print (result ? "✔ ".green : "✘ ".red )
-  end
+  # rubocop:disable Layout/SpaceInsideParens
+  # rubocop:disable Lint/ParenthesesAsGroupedExpression
+  print ( result ? '✔ '.green : '✘ '.red ) unless result.nil?
+  # rubocop:enable Lint/ParenthesesAsGroupedExpression
+  # rubocop:enable Layout/SpaceInsideParens
   if ENV['REPL_PROMPT']
-    system(ENV['REPL_PROMPT'])
-    print " "
+    system(ENV['REPL_PROMPT'] + ';')
+    print ' '
   else
     print "#{ARGV[0]}>> "
   end
@@ -121,23 +150,30 @@ loop do
     exit
   end
 
-  if post_pipe
-    if from_stdin
-      run = "echo \"%s\" | #{command} | %s" % [ line, post_pipe, nil ]
-    else
-      run = "#{command} %s | %s" % [ line, post_pipe, nil ]
-    end
+  next if line.strip.empty?
+  # remove leading command (just the command itself, not any arguments) if it is there
+  line.slice!(/^ *#{command.split.first} */)
+
+  # rubocop:disable Style/ConditionalAssignment
+  if ENV['__REPL_STDIN']
+    run = "echo \"#{line}\" | #{command}"
   else
-    if from_stdin
-      run = "echo \"%s\" | #{command}" % [ line, nil ]
-    else
-      run = "#{command} %s" % [ line, nil ]
-    end
+    run = "#{command} #{line}"
   end
+  # rubocop:enable Style/ConditionalAssignment
+  run = "#{run} #{ENV['__REPL_POST_COMMAND']}" if ENV['__REPL_POST_COMMAND']
   # use bash quotes to handle single quotes inside double quotes.
   # doesn't work when single quotes aren't inside double quoted strings. sigh
-  run.gsub!(/'/, '\'"\'"\'')
-  puts "bash -c 'set -o pipefail; #{run}'" if debug
-  result = system "bash -c 'set -o pipefail; #{run}'"
-  warn "Use Ctrl-D (i.e. EOF) to exit" if line =~ /^(exit|quit)$/
+  run = run.gsub(/'/, '\'"\'"\'')
+  # rubocop:disable Metrics/LineLength
+  puts "bash -c 'set -o pipefail; #{run} | #{ENV['__REPL_PAGER']}'" if ENV['__REPL_DEBUG']
+  # rubocop:enable Metrics/LineLength
+  # pipe to less with
+  # -N Numbers
+  # -M More output
+  # -J status
+  # -R raw ansi colors
+  # -F quit if it can all be displayed on a single screen
+  result = system "bash -c 'set -o pipefail; #{run} | #{ENV['__REPL_PAGER']}'"
+  warn 'Use Ctrl-D (i.e. EOF) to exit' if line =~ /^(exit|quit)$/
 end
